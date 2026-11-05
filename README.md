@@ -1,0 +1,115 @@
+# Ask My Docs
+
+A small **RAG (Retrieval-Augmented Generation)** app built with **Python, Django, FAISS,
+sentence-transformers and an LLM API**. Ask a question about the documents in `data/`. The app
+finds the most relevant passages and has an LLM answer **using only those passages**, showing
+the sources it used. If the documents don't contain the answer, it says so instead of guessing.
+
+The sample documents describe my own projects and tech stack, so you can ask things like
+*"What was the Kelsey Scholarship Portal built with?"* or *"Which mobile apps has Moiz built?"*
+
+## Architecture
+
+```
+ INGEST (run once: python ingest.py)
+ ───────────────────────────────────
+ data/*.md ──► split into chunks ──► embed each chunk ──► FAISS index + chunks.json
+               (by markdown heading)  (all-MiniLM-L6-v2,     (saved in index/)
+                                       384-dim vectors)
+
+ QUESTION (POST /ask)
+ ────────────────────
+ question ──► embed question ──► FAISS: top 3 most ──► score ≥ 0.25? ──no──► "I don't know
+              (same model)        similar chunks              │              based on the
+                                                             yes             documents."
+                                                              ▼
+                                   prompt = rules + 3 chunks + question
+                                                              ▼
+                                   LLM (OpenAI-compatible API) ──► answer + sources
+```
+
+**Why RAG?** An LLM doesn't know about my private documents, and it can make things up. RAG
+fixes both: we *retrieve* the relevant text first, then the LLM *generates* an answer grounded
+in that text. Showing the source chunks lets the user check the answer.
+
+## How it works
+
+| Step | Where | What happens |
+|---|---|---|
+| Chunking | `ingest.py` | Each markdown file is split on headings, so each chunk covers one topic. Each chunk's heading includes the document title (e.g. "About Moiz Tahir > Education"), which raised the score for "Where did Moiz study?" from 0.15 to 0.42 in testing. Sections over 800 characters are split again with 100 characters of overlap so nothing is lost at the cut. |
+| Embedding | `rag/engine.py` → `embed()` | `all-MiniLM-L6-v2` turns text into a 384-number vector. Texts with similar meaning get similar vectors, even with different words ("built with" ≈ "tech stack"). It runs locally: free, no API key. |
+| Indexing | `ingest.py` | Vectors are normalized and stored in a FAISS `IndexFlatIP`. With normalized vectors, inner product = cosine similarity. "Flat" = exact brute-force search, ideal for a small dataset. FAISS stores only numbers, so `chunks.json` keeps the matching text in the same order. |
+| Retrieval | `engine.retrieve()` | The question is embedded with the same model, and FAISS returns the 3 closest chunks with their similarity scores. |
+| Guardrail | `engine.answer()` | If even the best chunk scores below `0.25`, the app answers "I don't know" without calling the LLM. |
+| Generation | `engine.generate()` | The chunks and the question go to the LLM with strict rules: use only the context, otherwise reply "I don't know based on the documents." `temperature=0` keeps answers consistent. |
+| API | `rag/views.py` | `POST /ask` validates the input, calls the engine and returns JSON. Errors return clear messages with proper HTTP status codes (400, 502, 503). |
+
+### Design decisions
+
+- **Engine separate from Django.** `rag/engine.py` has no Django code, so the RAG logic can be
+  tested or reused (CLI, another framework) on its own. Views only deal with HTTP.
+- **Models load once.** The embedding model and index are cached in memory (`lru_cache`) after
+  the first request. Loading them on every request would add several seconds per question.
+- **Any OpenAI-compatible LLM.** It uses the `openai` library, and `LLM_BASE_URL` in `.env`
+  switches providers (OpenAI, Google Gemini, Groq, ...) without code changes.
+- **Works without a key.** With no `LLM_API_KEY`, it runs in *retrieval-only* mode and returns
+  the matching chunks. That's useful for testing retrieval on its own.
+- **No database.** The data lives in the FAISS index, so Django runs with a minimal config
+  (no ORM, admin or auth).
+
+## Setup
+
+Requires Python 3.11+.
+
+```bash
+git clone https://github.com/Syedmoiz7/ask-my-docs.git
+cd ask-my-docs
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt     # includes PyTorch, so this can take a few minutes
+
+cp .env.example .env                # then add your API key (optional)
+python ingest.py                    # builds the index (downloads the ~90 MB embedding model once)
+python manage.py runserver
+```
+
+Open http://127.0.0.1:8000, or call the API directly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What was the Kelsey Scholarship Portal built with?"}'
+```
+
+Example response (the exact answer wording depends on the LLM):
+
+```json
+{
+  "answer": "It was built with Next.js, Node.js, Express, PostgreSQL, WebSockets, JWT and Tailwind CSS. [web-projects.md]",
+  "mode": "rag",
+  "sources": [
+    {"source": "web-projects.md", "heading": "Web projects > Kelsey Scholarship Portal", "text": "...", "score": 0.562}
+  ]
+}
+```
+
+To use your own documents, put `.md` files in `data/` and run `python ingest.py` again.
+
+## Limitations and next steps
+
+- **Similarity threshold is hand-tuned.** `0.25` works for these documents; a larger dataset
+  would need an evaluation set of questions to tune it properly.
+- **Top 3 isn't enough for "list everything" questions.** "Which mobile apps has Moiz built?"
+  matches 3 chunks, but the apps are spread across more. Fixes: a higher or dynamic `k`, or
+  summary chunks per document.
+- **Measured scores.** In testing, relevant questions scored 0.35 to 0.56 and off-topic ones
+  (e.g. "What is the capital of France?") scored under 0.1, so 0.25 separates them cleanly.
+  Partly related questions ("Does Moiz know Kubernetes?", 0.32) pass the cutoff, so the LLM
+  prompt is the second safety layer that answers "I don't know".
+- **Flat index.** Brute-force search is exact but slows down past roughly a million vectors.
+  At that scale I'd use an approximate index (FAISS IVF/HNSW) or a vector database such as
+  Qdrant or Pinecone.
+- **Markdown only.** Next step: PDF support, with the same pipeline after text extraction.
+- **No conversation memory.** Each question is independent.
+- **Possible upgrades:** hybrid search (keyword + vector), re-ranking retrieved chunks, streaming
+  responses, and exposing the search as an MCP tool so AI agents can query the documents.

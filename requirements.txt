@@ -1,0 +1,6 @@
+django>=6.1,<7
+faiss-cpu>=1.15,<2
+sentence-transformers>=6.2,<7
+openai>=3.46,<4
+python-dotenv>=1.2,<2
+numpy>=2.5,<3
