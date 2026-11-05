@@ -1,17 +1,7 @@
----
-title: Ask About Me
-emoji: 📄
-colorFrom: gray
-colorTo: blue
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Ask About Me
 
 A small **RAG (Retrieval-Augmented Generation)** app built with **Python, Django, FAISS,
-sentence-transformers and an LLM API**. Ask a question about the documents in `data/`. The app
+fastembed and an LLM API**. Ask a question about the documents in `data/`. The app
 finds the most relevant passages and has an LLM answer **using only those passages**, showing
 the sources it used. If the documents don't contain the answer, it says so instead of guessing.
 
@@ -47,7 +37,7 @@ in that text. Showing the source chunks lets the user check the answer.
 | Step | Where | What happens |
 |---|---|---|
 | Chunking | `ingest.py` | Each markdown file is split on headings, so each chunk covers one topic. Each chunk's heading includes the document title (e.g. "About Moiz Tahir > Education"), which raised the score for "Where did Moiz study?" from 0.15 to 0.42 in testing. Sections over 800 characters are split again with 100 characters of overlap so nothing is lost at the cut. |
-| Embedding | `rag/engine.py` → `embed()` | `all-MiniLM-L6-v2` turns text into a 384-number vector. Texts with similar meaning get similar vectors, even with different words ("built with" ≈ "tech stack"). It runs locally: free, no API key. |
+| Embedding | `rag/engine.py` → `embed()` | `all-MiniLM-L6-v2` (a sentence-transformers model, run with fastembed) turns text into a 384-number vector. Texts with similar meaning get similar vectors, even with different words ("built with" ≈ "tech stack"). It runs locally: free, no API key. |
 | Indexing | `ingest.py` | Vectors are normalized and stored in a FAISS `IndexFlatIP`. With normalized vectors, inner product = cosine similarity. "Flat" = exact brute-force search, ideal for a small dataset. FAISS stores only numbers, so `chunks.json` keeps the matching text in the same order. |
 | Retrieval (hybrid) | `engine.retrieve()` | The question is embedded with the same model and FAISS ranks chunks by meaning. Each chunk also gets a keyword score: the share of the question's words (minus stopwords like "the", "is") that appear in it. Final score = vector score + 0.3 × keyword score; the top 3 are kept. |
 | Guardrail | `engine.answer()` | If even the best chunk scores below `0.25`, the app answers "I don't know" without calling the LLM. |
@@ -100,7 +90,7 @@ git clone https://github.com/Syedmoiz7/ask-about-me-rag-app.git
 cd ask-about-me-rag-app
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt     # includes PyTorch, so this can take a few minutes
+pip install -r requirements.txt
 
 cp .env.example .env                # then add your API key (optional)
 python ingest.py                    # builds the index (downloads the ~90 MB embedding model once)
@@ -131,20 +121,24 @@ To use your own documents, put `.md` files in `data/` and run `python ingest.py`
 
 ## Deployment
 
-The app is deployed on **Hugging Face Spaces** with Docker (free CPU tier). The block at the
-top of this README tells Spaces to build the `Dockerfile` and serve port 7860.
+The app is deployed on **Render**'s free plan. `render.yaml` describes the service (build
+command, start command, environment variables), so Render can set it up from the repo.
 
-- **Why Hugging Face Spaces?** The running app uses about 650 MB of RAM (PyTorch + embedding
-  model), more than many free tiers allow (e.g. 512 MB). Spaces' free CPU tier has 16 GB.
-- **Small, fast image.** The Dockerfile installs CPU-only PyTorch (the default Linux build
-  bundles several GB of GPU libraries) and runs `ingest.py` during the build, so the model and
-  index are baked in and the app starts without downloading anything.
+- **Memory was the main constraint.** The free plan has 512 MB of RAM. The first version used
+  sentence-transformers, which needs PyTorch, and the app used ~650 MB. Switching to
+  **fastembed** runs the *same* model with ONNX Runtime instead of PyTorch: the vectors are
+  identical (cosine similarity 1.0 with the old ones), retrieval scores didn't change, and memory
+  dropped to ~330 MB. The installed packages went from 1.2 GB to under 300 MB.
+- **Index built at deploy time.** The build command runs `ingest.py`, so the embedding model is
+  downloaded and the index built once per deploy, not on every start.
 - **Production server.** `gunicorn` with 1 worker (each worker loads its own model copy) and
-  4 threads, `DEBUG` off, and `ALLOWED_HOSTS` limited to `*.hf.space`.
-- **Secrets.** `LLM_API_KEY` is stored as a Space secret, never in the code or image.
+  4 threads, `DEBUG` off, and `ALLOWED_HOSTS` limited to `*.onrender.com`.
+- **Secrets.** `LLM_API_KEY` is set in Render's dashboard, never in the code.
+- **Free plan trade-off.** The service sleeps after 15 minutes without traffic; the next visit
+  takes about a minute to wake it.
 
-To deploy your own copy: create a Space (SDK: Docker), add `LLM_API_KEY` under
-*Settings → Variables and secrets*, and push this repo to the Space's git remote.
+To deploy your own copy: on Render choose **New → Blueprint**, connect this repo, and enter your
+`LLM_API_KEY` when asked.
 
 ## Limitations and next steps
 

@@ -21,7 +21,7 @@ from pathlib import Path
 import faiss
 import numpy as np
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -31,7 +31,12 @@ CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
 # Small, fast embedding model that runs locally (no API key, no cost).
 # It turns any text into a 384-number vector. Similar meaning -> similar vectors.
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# fastembed runs the model with ONNX Runtime instead of PyTorch: same model, same
+# vectors, but ~330 MB of RAM instead of ~650 MB, so it fits free hosting tiers.
+# The model files are stored inside the project so they survive from build to runtime.
+MODEL_CACHE_DIR = BASE_DIR / ".model_cache"
 
 TOP_K = 3  # how many chunks to send to the LLM
 CANDIDATES = 20  # how many chunks FAISS returns before re-scoring with keywords
@@ -74,24 +79,24 @@ Rules:
 
 
 @lru_cache(maxsize=1)
-def get_embedder() -> SentenceTransformer:
+def get_embedder() -> TextEmbedding:
     """Load the embedding model once and reuse it.
 
     Loading takes a few seconds, so doing it on every request would make each
     question slow. lru_cache keeps the loaded model in memory after the first call.
     """
-    return SentenceTransformer(EMBEDDING_MODEL)
+    return TextEmbedding(model_name=EMBEDDING_MODEL, cache_dir=str(MODEL_CACHE_DIR))
 
 
 def embed(texts: list[str]) -> np.ndarray:
     """Turn a list of texts into a matrix of vectors (one row per text).
 
-    normalize_embeddings=True scales every vector to length 1. That makes the
-    dot product of two vectors equal to their cosine similarity, which is what
-    the FAISS index below compares.
+    Every vector is scaled to length 1 (normalized). That makes the dot product
+    of two vectors equal to their cosine similarity, which is what the FAISS
+    index compares.
     """
-    vectors = get_embedder().encode(texts, normalize_embeddings=True)
-    return np.asarray(vectors, dtype="float32")  # FAISS requires float32
+    vectors = np.array(list(get_embedder().embed(texts)), dtype="float32")  # FAISS needs float32
+    return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 
 
 @lru_cache(maxsize=1)

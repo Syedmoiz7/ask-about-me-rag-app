@@ -1,0 +1,23 @@
+# Render Blueprint: Render reads this file to create and configure the web service.
+services:
+  - type: web
+    name: ask-about-me
+    runtime: python
+    plan: free
+    # Install packages, then build the FAISS index (also downloads the embedding model).
+    buildCommand: pip install -r requirements.txt && python ingest.py
+    # 1 worker: each worker loads its own model copy (~300 MB; the free plan has 512 MB).
+    # 4 threads handle several requests at once; 60 s timeout covers slow LLM calls.
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
+    healthCheckPath: /
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: ".onrender.com"
+      - key: LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai/
+      - key: LLM_MODEL
+        value: gemini-3.5-flash-lite
+      - key: LLM_API_KEY
+        sync: false   # secret: Render asks for it during setup, never stored in the repo

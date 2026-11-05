@@ -10,3 +10,6 @@ __pycache__/
 index/
 
 .DS_Store
+
+# Embedding model files (downloaded by ingest.py)
+.model_cache/
