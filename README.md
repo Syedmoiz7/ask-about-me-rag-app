@@ -1,4 +1,14 @@
-# Ask My Docs
+---
+title: Ask About Me
+emoji: 📄
+colorFrom: gray
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+# Ask About Me
 
 A small **RAG (Retrieval-Augmented Generation)** app built with **Python, Django, FAISS,
 sentence-transformers and an LLM API**. Ask a question about the documents in `data/`. The app
@@ -86,8 +96,8 @@ in that text. Showing the source chunks lets the user check the answer.
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/Syedmoiz7/ask-my-docs.git
-cd ask-my-docs
+git clone https://github.com/Syedmoiz7/ask-about-me-rag-app.git
+cd ask-about-me-rag-app
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt     # includes PyTorch, so this can take a few minutes
@@ -118,6 +128,23 @@ Example response (the exact answer wording depends on the LLM):
 ```
 
 To use your own documents, put `.md` files in `data/` and run `python ingest.py` again.
+
+## Deployment
+
+The app is deployed on **Hugging Face Spaces** with Docker (free CPU tier). The block at the
+top of this README tells Spaces to build the `Dockerfile` and serve port 7860.
+
+- **Why Hugging Face Spaces?** The running app uses about 650 MB of RAM (PyTorch + embedding
+  model), more than many free tiers allow (e.g. 512 MB). Spaces' free CPU tier has 16 GB.
+- **Small, fast image.** The Dockerfile installs CPU-only PyTorch (the default Linux build
+  bundles several GB of GPU libraries) and runs `ingest.py` during the build, so the model and
+  index are baked in and the app starts without downloading anything.
+- **Production server.** `gunicorn` with 1 worker (each worker loads its own model copy) and
+  4 threads, `DEBUG` off, and `ALLOWED_HOSTS` limited to `*.hf.space`.
+- **Secrets.** `LLM_API_KEY` is stored as a Space secret, never in the code or image.
+
+To deploy your own copy: create a Space (SDK: Docker), add `LLM_API_KEY` under
+*Settings → Variables and secrets*, and push this repo to the Space's git remote.
 
 ## Limitations and next steps
 

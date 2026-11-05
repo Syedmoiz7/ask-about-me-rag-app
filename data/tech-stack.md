@@ -26,4 +26,4 @@ and data sources. Moiz has used the Figma MCP server so a coding agent could rea
 ## Currently learning
 
 Python, Django, the OpenAI API, LangChain, embeddings, RAG and vector databases such as FAISS,
-Qdrant and Pinecone. This "Ask My Docs" project is part of that learning.
+Qdrant and Pinecone. This "Ask About Me" project is part of that learning.
