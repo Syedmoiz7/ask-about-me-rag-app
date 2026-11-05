@@ -13,3 +13,6 @@ index/
 
 # Embedding model files (downloaded by ingest.py)
 .model_cache/
+
+# Manually uploaded model files (see README > Deployment)
+models/

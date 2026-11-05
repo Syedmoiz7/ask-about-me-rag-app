@@ -121,24 +121,22 @@ To use your own documents, put `.md` files in `data/` and run `python ingest.py`
 
 ## Deployment
 
-The app is deployed on **Render**'s free plan. `render.yaml` describes the service (build
-command, start command, environment variables), so Render can set it up from the repo.
+The app runs on **PythonAnywhere**'s free plan, with Django served through its WSGI setup.
 
-- **Memory was the main constraint.** The free plan has 512 MB of RAM. The first version used
-  sentence-transformers, which needs PyTorch, and the app used ~650 MB. Switching to
-  **fastembed** runs the *same* model with ONNX Runtime instead of PyTorch: the vectors are
-  identical (cosine similarity 1.0 with the old ones), retrieval scores didn't change, and memory
-  dropped to ~330 MB. The installed packages went from 1.2 GB to under 300 MB.
-- **Index built at deploy time.** The build command runs `ingest.py`, so the embedding model is
-  downloaded and the index built once per deploy, not on every start.
-- **Production server.** `gunicorn` with 1 worker (each worker loads its own model copy) and
-  4 threads, `DEBUG` off, and `ALLOWED_HOSTS` limited to `*.onrender.com`.
-- **Secrets.** `LLM_API_KEY` is set in Render's dashboard, never in the code.
-- **Free plan trade-off.** The service sleeps after 15 minutes without traffic; the next visit
-  takes about a minute to wake it.
+- **Memory.** The first version used sentence-transformers, which needs PyTorch: ~650 MB of RAM
+  and 1.2 GB of packages, too much for free hosting. **fastembed** runs the *same* model with
+  ONNX Runtime instead: identical vectors (cosine similarity 1.0 with the old ones), unchanged
+  retrieval scores, ~330 MB of RAM and under 300 MB of packages.
+- **Blocked model download.** Free PythonAnywhere accounts can only reach an allowlist of sites.
+  Gemini's API is on it, but Hugging Face's file storage (`xethub.hf.co`) is not, so the model
+  download failed. The app now loads the model from `models/all-MiniLM-L6-v2/` when that folder
+  exists, so the 5 model files are uploaded once and nothing is downloaded on the server.
+- **Secrets.** `LLM_API_KEY` lives in a `.env` file on the server only, never in git.
+- **Production settings.** `DEBUG` off and `ALLOWED_HOSTS` limited to the app's domain, both set
+  through `.env`.
 
-To deploy your own copy: on Render choose **New → Blueprint**, connect this repo, and enter your
-`LLM_API_KEY` when asked.
+`render.yaml` is also included for hosts with enough memory and open network access
+(e.g. Render), where the model downloads automatically during the build.
 
 ## Limitations and next steps
 

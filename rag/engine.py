@@ -38,6 +38,11 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 # The model files are stored inside the project so they survive from build to runtime.
 MODEL_CACHE_DIR = BASE_DIR / ".model_cache"
 
+# Optional: a folder with the model files (model.onnx, tokenizer.json, ...). If it
+# exists, the model is loaded from here instead of downloaded. Used on hosts that
+# block Hugging Face's download servers (e.g. PythonAnywhere's free plan).
+LOCAL_MODEL_DIR = BASE_DIR / "models" / "all-MiniLM-L6-v2"
+
 TOP_K = 3  # how many chunks to send to the LLM
 CANDIDATES = 20  # how many chunks FAISS returns before re-scoring with keywords
 
@@ -85,6 +90,8 @@ def get_embedder() -> TextEmbedding:
     Loading takes a few seconds, so doing it on every request would make each
     question slow. lru_cache keeps the loaded model in memory after the first call.
     """
+    if (LOCAL_MODEL_DIR / "model.onnx").exists():
+        return TextEmbedding(model_name=EMBEDDING_MODEL, specific_model_path=str(LOCAL_MODEL_DIR))
     return TextEmbedding(model_name=EMBEDDING_MODEL, cache_dir=str(MODEL_CACHE_DIR))
 
 
