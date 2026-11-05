@@ -71,15 +71,25 @@
         result.append(el("p", "mode", modes[data.mode]));
         if (data.answer) result.append(el("div", "answer", data.answer));
 
-        if (data.sources.length) {
-          result.append(el("h3", null, "Sources"));
-          for (const s of data.sources) {
+        function showChunks(title, note, chunks) {
+          if (!chunks || !chunks.length) return;
+          result.append(el("h3", null, title));
+          if (note) result.append(el("p", "mode", note));
+          for (const s of chunks) {
             const box = el("div", "source");
-            box.append(el("b", null, `${s.source} · ${s.heading} · score ${s.score}`));
+            box.append(el("b", null,
+              `${s.source} · ${s.heading} · score ${s.score} ` +
+              `(meaning ${s.vector_score} + keywords ${s.keyword_score})`));
             box.append(el("span", null, s.text));
             result.append(box);
           }
         }
+
+        showChunks("Sources", null, data.sources);
+        // On "no-match", show what came closest so it's clear why nothing was used.
+        showChunks("Closest matches (not used)",
+          "These scored below the relevance cutoff, so they were not sent to the LLM.",
+          data.closest);
       } catch (err) {
         result.replaceChildren(el("p", "error", "Request failed: " + err));
       } finally {

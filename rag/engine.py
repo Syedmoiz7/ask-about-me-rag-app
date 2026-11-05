@@ -3,7 +3,8 @@ The RAG engine: everything between "user asks a question" and "app returns an an
 
 Flow for one question:
     1. Embed the question     -> a vector (list of 384 numbers) that captures its meaning
-    2. Search the FAISS index -> the 3 chunks whose vectors are closest to the question's
+    2. Hybrid search          -> score chunks by meaning (FAISS) + exact keyword matches,
+                                 keep the 3 best
     3. Build a prompt         -> instructions + those 3 chunks + the question
     4. Call the LLM           -> it answers using ONLY the chunks (or says "I don't know")
 
@@ -12,6 +13,7 @@ ingest.py (run once, ahead of time) creates the index this file searches.
 
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,16 +33,31 @@ CHUNKS_FILE = INDEX_DIR / "chunks.json"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 TOP_K = 3  # how many chunks to send to the LLM
+CANDIDATES = 20  # how many chunks FAISS returns before re-scoring with keywords
 
-# Chunks scoring below this are treated as "not relevant". Scores are cosine
-# similarity: 1.0 = same meaning, ~0 = unrelated. If even the best chunk is below
-# this, we skip the LLM and answer "I don't know" straight away.
+# Hybrid search: final score = vector score + KEYWORD_WEIGHT * keyword score.
+# The embedding model understands meaning ("built with" ~ "tech stack") but not
+# proper names it never saw in training ("Kelsey", "ioMoVo"). Exact keyword
+# matching covers that gap. 0.3 lets a full keyword match lift a weak vector
+# score above MIN_SCORE without letting keywords alone dominate.
+KEYWORD_WEIGHT = 0.3
+
+# Chunks scoring below this are treated as "not relevant". If even the best
+# chunk is below it, we skip the LLM and answer "I don't know" straight away.
 MIN_SCORE = 0.25
+
+# Common words that carry no topic, so they shouldn't count as keyword matches.
+STOPWORDS = set("""
+a an and are as at be by can did do does for from has have he her his how i in is it
+its me my of on or she so tell that the their them they this to was what when where
+which who why will with you your about any
+""".split())
 
 NOT_FOUND = "I don't know based on the documents."
 
 SYSTEM_PROMPT = f"""You answer questions using ONLY the context provided below.
 Rules:
+- If the input is just a keyword or topic (e.g. "Kelsey"), summarize what the context says about it.
 - If the context does not contain the answer, reply exactly: "{NOT_FOUND}"
 - Do not use outside knowledge, even if you know the answer.
 - Keep answers short and factual.
@@ -83,18 +100,47 @@ def load_index() -> tuple[faiss.Index, list[dict]]:
     return index, chunks
 
 
-def retrieve(question: str, k: int = TOP_K) -> list[dict]:
-    """Find the k chunks most similar in meaning to the question."""
-    index, chunks = load_index()
-    query_vector = embed([question])
-    scores, positions = index.search(query_vector, k)
+def keywords(text: str) -> set[str]:
+    """Lowercase words in the text, minus stopwords: 'Who is Kelsey?' -> {'kelsey'}."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS}
 
+
+def keyword_score(question_words: set[str], chunk: dict) -> float:
+    """Fraction of the question's keywords that appear in the chunk (0.0 to 1.0)."""
+    if not question_words:
+        return 0.0
+    chunk_words = keywords(f"{chunk['heading']} {chunk['text']}")
+    return len(question_words & chunk_words) / len(question_words)
+
+
+def retrieve(question: str, k: int = TOP_K) -> list[dict]:
+    """Hybrid search: find the k best chunks by meaning + keyword overlap."""
+    index, chunks = load_index()
+    question_words = keywords(question)
+
+    # 1. Vector search: FAISS returns candidates ranked by meaning.
+    scores, positions = index.search(embed([question]), min(CANDIDATES, index.ntotal))
+    vector_scores = {int(pos): float(s) for s, pos in zip(scores[0], positions[0]) if pos != -1}
+
+    # 2. Keyword search: also include any chunk that shares a keyword with the
+    #    question, even if FAISS ranked it low (e.g. a project name).
+    candidates = set(vector_scores) | {
+        i for i, c in enumerate(chunks) if keyword_score(question_words, c) > 0
+    }
+
+    # 3. Combine both scores and keep the best k.
     results = []
-    for score, pos in zip(scores[0], positions[0]):
-        if pos == -1:  # FAISS returns -1 when there are fewer than k chunks
-            continue
-        results.append({**chunks[pos], "score": round(float(score), 3)})
-    return results
+    for i in candidates:
+        vec = vector_scores.get(i, 0.0)
+        kw = keyword_score(question_words, chunks[i])
+        results.append({
+            **chunks[i],
+            "score": round(vec + KEYWORD_WEIGHT * kw, 3),
+            "vector_score": round(vec, 3),
+            "keyword_score": round(kw, 3),
+        })
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:k]
 
 
 def build_prompt(question: str, sources: list[dict]) -> str:
@@ -140,7 +186,9 @@ def answer(question: str) -> dict:
 
     if not relevant:
         # Nothing in the documents is close to the question: don't even ask the LLM.
-        return {"answer": NOT_FOUND, "mode": "no-match", "sources": sources}
+        # The closest chunks are still returned (as "closest") so you can see why,
+        # but they are NOT sources: nothing was used to answer.
+        return {"answer": NOT_FOUND, "mode": "no-match", "sources": [], "closest": sources}
 
     client = get_llm_client()
     if client is None:
