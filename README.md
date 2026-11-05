@@ -1,5 +1,7 @@
 # Ask About Me
 
+**Live demo: https://syedmoiz7.pythonanywhere.com**
+
 A small **RAG (Retrieval-Augmented Generation)** app built with **Python, Django, FAISS,
 fastembed and an LLM API**. Ask a question about the documents in `data/`. The app
 finds the most relevant passages and has an LLM answer **using only those passages**, showing
