@@ -4,6 +4,7 @@ lives in engine.py so it can be tested and reused without Django.
 """
 import json
 
+import openai
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
@@ -40,5 +41,13 @@ def ask(request):
         return JsonResponse(engine.answer(question))
     except FileNotFoundError as e:  # index not built yet
         return JsonResponse({"error": str(e)}, status=503)
+    except openai.APITimeoutError:
+        return JsonResponse({"error": (
+            f"The LLM didn't respond within {engine.LLM_TIMEOUT:.0f} seconds. Free tiers can be "
+            "slow when the provider is busy: try again, or switch LLM_MODEL to a lighter model."
+        )}, status=504)
+    except openai.APIStatusError as e:  # e.g. 429 quota exceeded, 503 overloaded
+        return JsonResponse({"error": f"LLM provider returned error {e.status_code}. Try again shortly."},
+                            status=502)
     except Exception as e:  # e.g. invalid API key, network error, quota exceeded
         return JsonResponse({"error": f"LLM request failed: {e}"}, status=502)

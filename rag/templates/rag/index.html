@@ -73,7 +73,11 @@
           "no-match": "No relevant chunks found",
           "no-answer": "Related chunks were found, but they don't contain the answer",
         };
-        result.append(el("p", "mode", modes[data.mode]));
+        // Show where the time went, e.g. "search 12 ms · LLM 1.8 s"
+        const t = data.timings || {};
+        const timing = [`search ${t.retrieval_ms} ms`];
+        if (t.llm_ms !== undefined) timing.push(`LLM ${(t.llm_ms / 1000).toFixed(1)} s`);
+        result.append(el("p", "mode", `${modes[data.mode]} · ${timing.join(" · ")}`));
         if (data.answer) result.append(el("div", "answer", data.answer));
 
         // A collapsible list: the summary line shows short names, clicking it

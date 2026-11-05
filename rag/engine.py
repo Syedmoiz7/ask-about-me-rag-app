@@ -14,6 +14,7 @@ ingest.py (run once, ahead of time) creates the index this file searches.
 import json
 import os
 import re
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -54,6 +55,12 @@ which who why will with you your about any
 """.split())
 
 NOT_FOUND = "I don't know based on the documents."
+
+# Fail fast instead of hanging. The openai library defaults to a 10-minute timeout
+# and 2 automatic retries, so one slow or overloaded LLM call could silently take
+# 30+ seconds. We allow one retry and at most LLM_TIMEOUT seconds per attempt.
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "10"))
+LLM_MAX_RETRIES = 1
 
 SYSTEM_PROMPT = f"""You answer questions using ONLY the context provided below.
 Rules:
@@ -183,7 +190,21 @@ def get_llm_client() -> OpenAI | None:
     if not os.getenv("LLM_MODEL"):
         raise RuntimeError("LLM_API_KEY is set but LLM_MODEL is missing in .env")
     base_url = os.getenv("LLM_BASE_URL") or None  # None = OpenAI's default URL
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key, base_url=base_url,
+                  timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
+
+
+def warm_up() -> None:
+    """Load the embedding model and index at server start, not on the first question.
+
+    Without this, whoever asks the first question waits several extra seconds
+    while PyTorch and the model load.
+    """
+    get_embedder()
+    try:
+        load_index()
+    except FileNotFoundError:
+        pass  # ingest.py hasn't been run yet; /ask will report it
 
 
 def generate(question: str, sources: list[dict], client: OpenAI) -> str:
@@ -199,27 +220,42 @@ def generate(question: str, sources: list[dict], client: OpenAI) -> str:
     return response.choices[0].message.content.strip()
 
 
+def ms_since(start: float) -> int:
+    return round((time.perf_counter() - start) * 1000)
+
+
 def answer(question: str) -> dict:
-    """The full RAG pipeline: retrieve, then (if possible) generate."""
+    """The full RAG pipeline: retrieve, then (if possible) generate.
+
+    Every response includes "timings" (milliseconds per step) so slow requests
+    show exactly where the time went.
+    """
+    start = time.perf_counter()
     sources = retrieve(question)
+    timings = {"retrieval_ms": ms_since(start)}
     relevant = [s for s in sources if s["score"] >= MIN_SCORE]
 
     if not relevant:
         # Nothing in the documents is close to the question: don't even ask the LLM.
         # The closest chunks are still returned (as "closest") so you can see why,
         # but they are NOT sources: nothing was used to answer.
-        return {"answer": NOT_FOUND, "mode": "no-match", "sources": [], "closest": sources}
+        return {"answer": NOT_FOUND, "mode": "no-match", "sources": [],
+                "closest": sources, "timings": timings}
 
     client = get_llm_client()
     if client is None:
         # No API key: still useful, we show what retrieval found.
-        return {"answer": None, "mode": "retrieval-only", "sources": relevant}
+        return {"answer": None, "mode": "retrieval-only", "sources": relevant, "timings": timings}
 
+    start = time.perf_counter()
     text = generate(question, relevant, client)
+    timings["llm_ms"] = ms_since(start)
 
     if text.startswith(NOT_FOUND):
         # The chunks were related, but the LLM found no answer in them (e.g.
         # "Does Moiz know Kubernetes?"). Nothing was used, so there are no sources.
-        return {"answer": NOT_FOUND, "mode": "no-answer", "sources": [], "closest": relevant}
+        return {"answer": NOT_FOUND, "mode": "no-answer", "sources": [],
+                "closest": relevant, "timings": timings}
 
-    return {"answer": text, "mode": "rag", "sources": cited_sources(text, relevant)}
+    return {"answer": text, "mode": "rag", "sources": cited_sources(text, relevant),
+            "timings": timings}

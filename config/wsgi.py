@@ -4,3 +4,8 @@ from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 application = get_wsgi_application()
+
+# Load the embedding model now, so the first question isn't slow.
+from rag.engine import warm_up  # noqa: E402
+
+warm_up()

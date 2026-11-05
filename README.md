@@ -69,6 +69,15 @@ in that text. Showing the source chunks lets the user check the answer.
   switches providers (OpenAI, Google Gemini, Groq, ...) without code changes.
 - **Works without a key.** With no `LLM_API_KEY`, it runs in *retrieval-only* mode and returns
   the matching chunks. That's useful for testing retrieval on its own.
+- **Fast failure and visible timings.** Every response includes `timings` (search vs LLM, in
+  ms), and the page shows them. Measured: search takes ~10 ms; nearly all response time is the
+  LLM call, which on Gemini's free tier ranged from 0.6 s to 18 s for the same question. The
+  `openai` library defaults to a 10-minute timeout with 2 automatic retries, which made some
+  requests hang for 30+ seconds, so the client uses a 10 s timeout and 1 retry (a stuck call is retried quickly) and shows a
+  clear error instead. `gemini-3.5-flash-lite` was chosen over `gemini-3.5-flash` after
+  measuring: median 1.2 s vs 5.7 s, with the same answers on this task.
+- **Model loaded at startup.** `config/wsgi.py` calls `warm_up()`, so the embedding model loads
+  when the server starts rather than making the first user wait.
 - **No database.** The data lives in the FAISS index, so Django runs with a minimal config
   (no ORM, admin or auth).
 
