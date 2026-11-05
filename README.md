@@ -41,7 +41,8 @@ in that text. Showing the source chunks lets the user check the answer.
 | Indexing | `ingest.py` | Vectors are normalized and stored in a FAISS `IndexFlatIP`. With normalized vectors, inner product = cosine similarity. "Flat" = exact brute-force search, ideal for a small dataset. FAISS stores only numbers, so `chunks.json` keeps the matching text in the same order. |
 | Retrieval (hybrid) | `engine.retrieve()` | The question is embedded with the same model and FAISS ranks chunks by meaning. Each chunk also gets a keyword score: the share of the question's words (minus stopwords like "the", "is") that appear in it. Final score = vector score + 0.3 × keyword score; the top 3 are kept. |
 | Guardrail | `engine.answer()` | If even the best chunk scores below `0.25`, the app answers "I don't know" without calling the LLM. |
-| Generation | `engine.generate()` | The chunks and the question go to the LLM with strict rules: use only the context, otherwise reply "I don't know based on the documents." `temperature=0` keeps answers consistent. |
+| Generation | `engine.generate()` | The numbered chunks ([1], [2], [3]) and the question go to the LLM with strict rules: use only the context, cite chunk numbers, otherwise reply "I don't know based on the documents." `temperature=0` keeps answers consistent. |
+| Citations | `engine.cited_sources()` | The app reads the citation numbers in the answer and returns only those chunks as sources, so retrieved-but-unused chunks aren't shown as sources. |
 | API | `rag/views.py` | `POST /ask` validates the input, calls the engine and returns JSON. Errors return clear messages with proper HTTP status codes (400, 502, 503). |
 
 ### Design decisions
@@ -52,6 +53,9 @@ in that text. Showing the source chunks lets the user check the answer.
   Adding keyword matching fixed both (Kelsey → 0.546, Ask It World → correct chunk), while
   off-topic questions like "pizza" still score under 0.1 and are blocked. This is the same
   idea production systems use when they combine BM25 keyword search with vector search.
+- **Only cited chunks are shown as sources.** Retrieval returns up to 3 chunks, but the LLM
+  doesn't always use all of them. Showing only cited ones keeps sources honest. In the UI they
+  start collapsed under the answer and expand to show the full text and score breakdown.
 - **Two safety layers against made-up answers.** The score cutoff blocks clearly unrelated
   questions without calling the LLM. Near-misses that pass it (e.g. "Does Moiz know
   Kubernetes?", or "what time is it" matching "real-time") are caught by the prompt, and the
@@ -96,10 +100,10 @@ Example response (the exact answer wording depends on the LLM):
 
 ```json
 {
-  "answer": "It was built with Next.js, Node.js, Express, PostgreSQL, WebSockets, JWT and Tailwind CSS. [web-projects.md]",
+  "answer": "The Kelsey Scholarship Portal was built with Next.js, Node.js, Express, PostgreSQL, WebSockets, JWT authentication, and Tailwind CSS [1].",
   "mode": "rag",
   "sources": [
-    {"source": "web-projects.md", "heading": "Web projects > Kelsey Scholarship Portal", "text": "...", "score": 0.862, "vector_score": 0.562, "keyword_score": 1.0}
+    {"ref": 1, "source": "web-projects.md", "heading": "Web projects > Kelsey Scholarship Portal", "text": "...", "score": 0.862, "vector_score": 0.562, "keyword_score": 1.0}
   ]
 }
 ```

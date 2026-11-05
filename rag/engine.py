@@ -61,7 +61,9 @@ Rules:
 - If the context does not contain the answer, reply exactly: "{NOT_FOUND}"
 - Do not use outside knowledge, even if you know the answer.
 - Keep answers short and factual.
-- After the answer, list the sources you used in square brackets, e.g. [web-projects.md]."""
+- Each context chunk starts with a number like [1]. Cite the chunks you used with those
+  numbers right after the sentence they support, e.g. "It uses PostgreSQL [1]."
+- Only cite chunks you actually used."""
 
 
 @lru_cache(maxsize=1)
@@ -144,11 +146,29 @@ def retrieve(question: str, k: int = TOP_K) -> list[dict]:
 
 
 def build_prompt(question: str, sources: list[dict]) -> str:
-    """Put the retrieved chunks and the question into one message for the LLM."""
+    """Put the numbered chunks and the question into one message for the LLM.
+
+    Numbering the chunks ([1], [2], [3]) lets the LLM cite exactly which ones it
+    used, so the app can show only those as sources.
+    """
     context = "\n\n".join(
-        f"[{s['source']}] {s['heading']}\n{s['text']}" for s in sources
+        f"[{n}] ({s['source']} > {s['heading']})\n{s['text']}"
+        for n, s in enumerate(sources, start=1)
     )
     return f"Context:\n{context}\n\nQuestion: {question}"
+
+
+def cited_sources(answer_text: str, sources: list[dict]) -> list[dict]:
+    """Return only the chunks the LLM cited, e.g. "[1]" or "[1, 3]" in the answer.
+
+    Each returned chunk gets a "ref" number matching its citation in the answer.
+    If the LLM cited nothing, we can't tell what it used, so all chunks are returned.
+    """
+    numbers = {int(n) for group in re.findall(r"\[([\d,\s]+)\]", answer_text)
+               for n in re.findall(r"\d+", group)}
+    numbered = [{**s, "ref": n} for n, s in enumerate(sources, start=1)]
+    cited = [s for s in numbered if s["ref"] in numbers]
+    return cited or numbered
 
 
 def get_llm_client() -> OpenAI | None:
@@ -195,4 +215,11 @@ def answer(question: str) -> dict:
         # No API key: still useful, we show what retrieval found.
         return {"answer": None, "mode": "retrieval-only", "sources": relevant}
 
-    return {"answer": generate(question, relevant, client), "mode": "rag", "sources": relevant}
+    text = generate(question, relevant, client)
+
+    if text.startswith(NOT_FOUND):
+        # The chunks were related, but the LLM found no answer in them (e.g.
+        # "Does Moiz know Kubernetes?"). Nothing was used, so there are no sources.
+        return {"answer": NOT_FOUND, "mode": "no-answer", "sources": [], "closest": relevant}
+
+    return {"answer": text, "mode": "rag", "sources": cited_sources(text, relevant)}
